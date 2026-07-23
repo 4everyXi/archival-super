@@ -59,11 +59,7 @@ def _translate_google(text: str, target: str = "zh-CN") -> str | None:
 # ── AI 翻译引擎（OpenAI 兼容 API） ──────────────────────────
 def _translate_ai(text: str, api_key: str, endpoint: str = "https://api.deepseek.com",
                   model: str = "deepseek-chat") -> str | None:
-    """通过任意 OpenAI 兼容 API 翻译
-    
-    集成自 Smart-File-Translator 的 AI 翻译模式
-    提示词设计借鉴 LinguaGacha 的 {source}→{target} 格式
-    """
+    """通过任意 OpenAI 兼容 API 翻译（机械 AI 翻译）"""
     import urllib.request
     import urllib.error
 
@@ -100,11 +96,10 @@ def _translate_ai(text: str, api_key: str, endpoint: str = "https://api.deepseek
             with urllib.request.urlopen(req, timeout=30) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
                 content = result["choices"][0]["message"]["content"].strip()
-                # 清理 AI 常见的多余字符
                 content = content.replace('"', '').replace("'", "").replace("`", "")
                 return content
         except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError,
-                KeyError, IndexError) as e:
+                KeyError, IndexError):
             if attempt < 2:
                 import time
                 time.sleep((attempt + 1) * 5)
@@ -113,26 +108,122 @@ def _translate_ai(text: str, api_key: str, endpoint: str = "https://api.deepseek
     return None
 
 
+# ── AI 精修引擎（原技能"正向精修"完整流程） ─────────────────
+def _refine_ai(text: str, api_key: str,
+               endpoint: str = "https://api.deepseek.com",
+               model: str = "deepseek-chat",
+               tone: str = "auto") -> str | None:
+    """AI 精修——不是简单翻译，而是理解语义后精修
+
+    原 archival 技能"正向精修"流程（六步）:
+      ① 基调判断 → 成人/萌系/正经/技术
+      ② 词汇提取+分类 → 角色名/描述/标记
+      ③ 语义理解 → 语序反转/屏蔽词还原
+      ④ 整句翻译 → 自然输出
+      ⑤ 校准 → 技术规格不被翻译
+      ⑥ 验证 → 结果自查
+
+    Args:
+        text: 文件名
+        api_key: AI API Key
+        endpoint: API 端点
+        model: 模型名
+        tone: 基调 (auto/adult/cute/formal/technical)
+    """
+    import urllib.request
+    import urllib.error
+
+    # 构建基调指示
+    tone_map = {
+        "adult": "成人内容，用词越粗俗淫荡越自然（肉棒/淫穴/巨根/颜射）",
+        "cute": "萌系内容，用词越软萌越自然（小可爱/人家/软乎乎）",
+        "formal": "正经/正式内容，用词越规范越自然",
+        "technical": "技术/专业内容，术语越准确越自然（插帧/编码/渲染）",
+        "auto": "根据内容自动判断基调，选择最合适的用词风格",
+    }
+    tone_instruction = tone_map.get(tone, tone_map["auto"])
+
+    system_prompt = (
+        "You are a professional filename refinement expert for Japanese media content. "
+        "You understand Japanese language structure (SOV), Chinese structure (SVO), "
+        "and the differences between them.\n\n"
+        "Rules:\n"
+        "1. Identify the tone first, then translate accordingly.\n"
+        f"   Tone: {tone_instruction}\n"
+        "2. Japanese name suffixes like ちゃん/くん/さん → 小/阿(neutral) or omit\n"
+        "3. Japanese word order (SOV) → Chinese word order (SVO)\n"
+        "4. Censored words (○×) → infer and restore the full word\n"
+        "5. Technical specs (1080p, 4K, ver, fps) → NEVER translate, keep original\n"
+        "6. Character names → search memory for known official translations\n"
+        "7. Return ONLY the refined filename, no explanations.\n"
+        "8. Maintain original file extension if present."
+    )
+
+    user_prompt = f"Refine this filename: {text}"
+
+    payload = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.5,
+        "max_tokens": 512,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{endpoint.rstrip('/')}/v1/chat/completions",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                content = result["choices"][0]["message"]["content"].strip()
+                content = content.replace('"', '').replace("'", "").replace("`", "")
+                return content
+        except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError,
+                KeyError, IndexError):
+            if attempt < 2:
+                import time
+                time.sleep((attempt + 1) * 10)
+            else:
+                return None
+    return None
+
+
 # ── 主翻译函数 ─────────────────────────────────────────────
 def translate_filename(name: str, engine: str = "table",
                        config: dict | None = None) -> str | None:
-    """翻译文件名，支持三种引擎
-    
+    """翻译文件名，支持四种引擎
+
     Args:
         name: 文件名
-        engine: "table"|"google"|"ai"
+        engine: "table"|"google"|"ai"|"refine"
         config: 引擎配置
-            table: {mappings: list[tuple[str,str]], glossary: dict[str,str]}
-            google: {target: str}
-            ai: {api_key, endpoint, model}
     """
+
+    def _call_ai(text, cfg):
+        return _refine_ai(
+            text,
+            api_key=cfg.get("api_key", ""),
+            endpoint=cfg.get("endpoint", "https://api.deepseek.com"),
+            model=cfg.get("model", "deepseek-chat"),
+            tone=cfg.get("tone", "auto"),
+        )
+
     config = config or {}
     stem = Path(name).stem
     ext = Path(name).suffix
 
-    translated = None
-    if engine == "google":
-        translated = _translate_google(stem, config.get("target", "zh-CN"))
+    if engine == "refine":
+        translated = _call_ai(stem, config)
     elif engine == "ai":
         translated = _translate_ai(
             stem,
@@ -140,16 +231,17 @@ def translate_filename(name: str, engine: str = "table",
             endpoint=config.get("endpoint", "https://api.deepseek.com"),
             model=config.get("model", "deepseek-chat"),
         )
-    else:  # table mode (default)
-        # 使用原始 archival translator 引擎
+    elif engine == "google":
+        translated = _translate_google(stem, config.get("target", "zh-CN"))
+    else:  # table mode
         mappings = config.get("mappings", DEFAULT_TRANSLATIONS)
         try:
-            engine_inst = TranslationEngine(
+            eng = TranslationEngine(
                 mappings=mappings,
                 config=BuiltinConfig(),
                 sequence=create_full_sanitize_sequence(),
             )
-            result = engine_inst.translate(name)
+            result = eng.translate(name)
             if result.translated:
                 return result.translated
         except Exception:
@@ -157,8 +249,7 @@ def translate_filename(name: str, engine: str = "table",
         return None
 
     if translated and translated != stem:
-        cleaned = clean_filename(translated)
-        return cleaned + ext
+        return clean_filename(translated) + ext
     return None
 
 

@@ -52,8 +52,8 @@ def main():
     parser.add_argument("--backup", metavar="PREFIX", help="备份文件前缀")
     parser.add_argument("--rollback", metavar="FILE", nargs="+", help="从备份回滚")
     parser.add_argument("--config", help="配置文件")
-    parser.add_argument("--translate", choices=["table", "google", "ai"], nargs="?",
-                        const="table", help="翻译引擎: table(默认)|google(免费)|ai(需API Key)")
+    parser.add_argument("--translate", choices=["table", "google", "ai", "refine"], nargs="?",
+                        const="table", help="翻译引擎: table(默认)|google(免费)|ai(机械AI)|refine(AI精修)")
     parser.add_argument("--step-config", metavar="KEY=VALUE", action="append",
                         help="步骤配置: e.g. --step-config translator.api_key=sk-xxx")
     parser.add_argument("--flatten", choices=["all", "archived"], nargs="?",
