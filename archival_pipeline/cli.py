@@ -56,6 +56,8 @@ def main():
                         const="table", help="翻译引擎: table(默认)|google(免费)|ai(机械AI)|refine(AI精修)")
     parser.add_argument("--step-config", metavar="KEY=VALUE", action="append",
                         help="步骤配置: e.g. --step-config translator.api_key=sk-xxx")
+    parser.add_argument("--template", metavar="FORMAT",
+                        help="命名模板(默认 {date}_{context}_{name}{ext})。支持: {date} {context} {name} {ext} {counter}")
     parser.add_argument("--flatten", choices=["all", "archived"], nargs="?",
                         const="all", help="平铺：all=全部 | archived=仅档案化过的")
     args = parser.parse_args()
@@ -96,6 +98,11 @@ def main():
         step_configs["translator"]["engine"] = args.translate
         p.context.step_configs = step_configs
         p.register(Step0Translator())
+    if args.template:
+        if "inherit_prefix" not in step_configs:
+            step_configs["inherit_prefix"] = {}
+        step_configs["inherit_prefix"]["template"] = args.template
+        p.context.step_configs = step_configs
     p.register_all()
 
     if not args.execute:

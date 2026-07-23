@@ -149,20 +149,48 @@ class Step2InheritPrefix(PipelineStep):
     allow_mtime: bool = False
 
     def preview(self, ctx: PipelineContext) -> StepPreview:
-        # 从 step_config 读取正向模式开关
         step_cfg = ctx.step_configs.get(self.name, {})
         allow_mtime = step_cfg.get("allow_mtime", self.allow_mtime)
+        template = step_cfg.get("template", None)
 
         ops = []
         changed = 0
-        for rec in ctx.records:
-            prefix = compute_prefix(rec.current_path, ctx.target_dir,
-                                    allow_mtime=allow_mtime)
-            if prefix:
-                new_name = prefix + rec.current_path.name
+        for i, rec in enumerate(ctx.records):
+            date, context = find_parent_date_and_context(
+                rec.current_path, ctx.target_dir)
+            if not date and allow_mtime:
+                date = get_date_prefix_from_mtime(rec.current_path)
+
+            if template:
+                # 自定义模板（从 bulk-rename-py TokenProcessor 复制）
+                try:
+                    from archival_pipeline.external.token_processor import TokenProcessor
+                    # 预替换 {context}，因为 TokenProcessor 不支持
+                    filled = template.replace("{context}", context or "")
+                    new_name = TokenProcessor.apply_name_mask(
+                        mask=filled,
+                        oname=rec.current_path.stem,
+                        ext=rec.current_path.suffix,
+                        counter=str(i + 1).zfill(3),
+                        date_str=date or "",
+                        time_str="",
+                    )
+                except ImportError:
+                    new_name = None
+            else:
+                # 默认: {date}_{context}_{name}{ext}
+                stem = rec.current_path.stem
+                if _YYMMDD_HEAD.match(stem) and _validate_date(stem[:6]):
+                    continue  # 文件已有日期前缀，跳过
+                parts = [p for p in [date, context] if p]
+                prefix = "_".join(parts) + "_" if parts else ""
+                new_name = prefix + rec.current_path.name if prefix else None
+
+            if new_name and new_name != rec.current_path.name:
                 new_path = rec.current_path.with_name(new_name)
                 ops.append(RenameOperation(rec.current_path, new_path))
                 changed += 1
+
         return StepPreview(
             step_name=self.name,
             operations=ops,
