@@ -52,7 +52,10 @@ def main():
     parser.add_argument("--backup", metavar="PREFIX", help="备份文件前缀")
     parser.add_argument("--rollback", metavar="FILE", nargs="+", help="从备份回滚")
     parser.add_argument("--config", help="配置文件")
-    parser.add_argument("--translate", action="store_true", help="启用翻译步骤（Step 0：日/韩/英→中文）")
+    parser.add_argument("--translate", choices=["table", "google", "ai"], nargs="?",
+                        const="table", help="翻译引擎: table(默认)|google(免费)|ai(需API Key)")
+    parser.add_argument("--step-config", metavar="KEY=VALUE", action="append",
+                        help="步骤配置: e.g. --step-config translator.api_key=sk-xxx")
     parser.add_argument("--flatten", choices=["all", "archived"], nargs="?",
                         const="all", help="平铺：all=全部 | archived=仅档案化过的")
     args = parser.parse_args()
@@ -67,14 +70,31 @@ def main():
     if args.config:
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
 
+    # 解析 --step-config 参数
+    step_configs: dict[str, dict] = {}
+    if args.step_config:
+        for sc in args.step_config:
+            if "=" not in sc:
+                continue
+            key, value = sc.split("=", 1)
+            parts = key.split(".", 1)
+            if len(parts) == 2:
+                step_name, step_key = parts
+                step_configs.setdefault(step_name, {})[step_key] = value
+
     # 纯平铺模式（不执行档案化）
     if args.flatten and not args.execute:
         flatten(target, args.flatten)
         return
 
-    p = Pipeline(target, config=config, dry_run=not args.execute)
+    p = Pipeline(target, config=config, step_configs=step_configs,
+                 dry_run=not args.execute)
     if args.translate:
         from archival_pipeline.steps.step0_translator import Step0Translator
+        if "translator" not in step_configs:
+            step_configs["translator"] = {}
+        step_configs["translator"]["engine"] = args.translate
+        p.context.step_configs = step_configs
         p.register(Step0Translator())
     p.register_all()
 
