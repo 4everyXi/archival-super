@@ -52,6 +52,7 @@ def main():
     parser.add_argument("--backup", metavar="PREFIX", help="备份文件前缀")
     parser.add_argument("--rollback", metavar="FILE", nargs="+", help="从备份回滚")
     parser.add_argument("--config", help="配置文件")
+    parser.add_argument("--translate", action="store_true", help="启用翻译步骤（Step 0：日/韩/英→中文）")
     parser.add_argument("--flatten", choices=["all", "archived"], nargs="?",
                         const="all", help="平铺：all=全部 | archived=仅档案化过的")
     args = parser.parse_args()
@@ -72,6 +73,9 @@ def main():
         return
 
     p = Pipeline(target, config=config, dry_run=not args.execute)
+    if args.translate:
+        from archival_pipeline.steps.step0_translator import Step0Translator
+        p.register(Step0Translator())
     p.register_all()
 
     if not args.execute:
